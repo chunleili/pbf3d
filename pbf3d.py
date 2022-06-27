@@ -2,12 +2,13 @@
 # Taichi implementation by Ye Kuang (k-ye)
 
 import math
+from typing import Counter
 
 import numpy as np
 
 import taichi as ti
 
-ti.init(arch=ti.gpu)
+ti.init(arch=ti.cpu, debug=True)
 
 screen_res = (800, 400)
 screen_to_world_ratio = 10.0
@@ -142,38 +143,21 @@ def move_board():
     b[0] += -ti.sin(b[1] * np.pi / period) * vel_strength * time_delta
     board_states[None] = b
 
-@ti.func
-def neighbor_search():
-    # find particle neighbors
-    for p_i in positions:
-        pos_i = positions[p_i]
-        cell = get_cell(pos_i)
-        nb_i = 0
-        for offs in ti.static(ti.grouped(ti.ndrange((-1, 2), (-1, 2)))):
-            cell_to_check = cell + offs
-            if is_in_grid(cell_to_check):
-                for j in range(grid_num_particles[cell_to_check]):
-                    p_j = grid2particles[cell_to_check, j]
-                    if nb_i < max_num_neighbors and p_j != p_i and (
-                            pos_i - positions[p_j]).norm() < neighbor_radius:
-                        particle_neighbors[p_i, nb_i] = p_j
-                        nb_i += 1
-        particle_num_neighbors[p_i] = nb_i
 
-
+################prologue##########
 @ti.kernel
 def prologue():
     # save old positions
     for i in positions:
         old_positions[i] = positions[i]
-    # apply gravity within boundary
-    for i in positions:
-        g = ti.Vector([0.0, -9.8])
-        pos, vel = positions[i], velocities[i]
-        vel += g * time_delta
-        pos += vel * time_delta
-        positions[i] = confine_position_to_boundary(pos)
 
+    # apply gravity within boundary
+    extern_force()
+
+    neighbor_search()
+
+@ti.func
+def neighbor_search():
     # clear neighbor lookup table
     for I in ti.grouped(grid_num_particles):
         grid_num_particles[I] = 0
@@ -187,14 +171,50 @@ def prologue():
         # but we can directly use int Vectors as indices
         offs = ti.atomic_add(grid_num_particles[cell], 1)
         grid2particles[cell, offs] = p_i
-        
-    neighbor_search()
 
+    # find particle neighbors
+    for p_i in positions:
+        pos_i = positions[p_i]
+        cell = get_cell(pos_i)
+        nb_i = 0
+        for offs in ti.static(ti.grouped(ti.ndrange((-1, 2), (-1, 2)))):
+            cell_to_check = cell + offs
+            if is_in_grid(cell_to_check):
+                for j in range(grid_num_particles[cell_to_check]):
+                    p_j = grid2particles[cell_to_check, j]
+                    if nb_i < max_num_neighbors and p_j != p_i and (pos_i - positions[p_j]).norm() < neighbor_radius:
+                        particle_neighbors[p_i, nb_i] = p_j
+                        nb_i += 1
+        particle_num_neighbors[p_i] = nb_i
 
+@ti.func
+def extern_force():
+    for i in positions:
+        g = ti.Vector([0.0, -9.8])
+        pos, vel = positions[i], velocities[i]
+        vel += g * time_delta
+        pos += vel * time_delta
+        positions[i] = confine_position_to_boundary(pos)
+
+################end prologue##########
+
+################substep##########
 @ti.kernel
 def substep():
     # compute lambdas
     # Eq (8) ~ (11)
+    compute_lambda()
+
+    # compute position deltas
+    # Eq(12), (14)
+    compute_position_delta()
+
+    # apply position deltas
+    for i in positions:
+        positions[i] += position_deltas[i]
+
+@ti.func
+def compute_lambda():
     for p_i in positions:
         pos_i = positions[p_i]
 
@@ -219,8 +239,8 @@ def substep():
         sum_gradient_sqr += grad_i.dot(grad_i)
         lambdas[p_i] = (-density_constraint) / (sum_gradient_sqr +
                                                 lambda_epsilon)
-    # compute position deltas
-    # Eq(12), (14)
+@ti.func
+def compute_position_delta():
     for p_i in positions:
         pos_i = positions[p_i]
         lambda_i = lambdas[p_i]
@@ -238,9 +258,7 @@ def substep():
 
         pos_delta_i /= rho0
         position_deltas[p_i] = pos_delta_i
-    # apply position deltas
-    for i in positions:
-        positions[i] += position_deltas[i]
+################end substep##########
 
 
 @ti.kernel
@@ -302,7 +320,7 @@ def main():
     print(f'boundary={boundary} grid={grid_size} cell_size={cell_size}')
     gui = ti.GUI('PBF2D', screen_res)
     while gui.running and not gui.get_event(gui.ESCAPE):
-        move_board()
+        # move_board()
         run_pbf()
         if gui.frame % 20 == 1:
             print_stats()
