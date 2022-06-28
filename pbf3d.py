@@ -2,13 +2,15 @@
 # Taichi implementation by Ye Kuang (k-ye)
 
 import math
+from pprint import PrettyPrinter
 from typing import Counter
 
 import numpy as np
 
 import taichi as ti
 
-ti.init(arch=ti.cpu, debug=True)
+ti.init(arch=ti.cpu, debug=True, cpu_max_num_threads=1, advanced_optimization=False)
+
 
 screen_res = (800, 400)
 screen_to_world_ratio = 10.0
@@ -292,6 +294,12 @@ def render(gui):
     gui.show()
 
 
+
+@ti.kernel
+def init():
+    for i in range(num_particles):
+        positions[i] = ti.Vector([ti.random() for i in range(dim)]) * 0.4 + 0.15
+        
 @ti.kernel
 def init_particles():
     for i in range(num_particles):
@@ -303,7 +311,6 @@ def init_particles():
         for c in ti.static(range(dim)):
             velocities[i][c] = (ti.random() - 0.5) * 4
     board_states[None] = ti.Vector([boundary[0] - epsilon, -0.0])
-
 
 def print_stats():
     print('PBF stats:')
@@ -319,12 +326,21 @@ def main():
     init_particles()
     print(f'boundary={boundary} grid={grid_size} cell_size={cell_size}')
     gui = ti.GUI('PBF2D', screen_res)
+
+    export_file = "/PLY/result.ply" 
+
     while gui.running and not gui.get_event(gui.ESCAPE):
         # move_board()
         run_pbf()
         if gui.frame % 20 == 1:
             print_stats()
         render(gui)
+
+        # pos = positions.to_numpy()
+        # if export_file:
+        #     writer = ti.tools.PLYWriter(num_vertices=num_particles)
+        #     writer.add_vertex_pos(pos[:, 0], pos[:, 1], pos[:, 2])
+        #     writer.export_frame(gui.frame, export_file)
 
 
 if __name__ == '__main__':
