@@ -3,6 +3,7 @@
 
 import math
 from pprint import PrettyPrinter
+from termios import TIOCPKT_START
 from typing import Counter
 
 import numpy as np
@@ -133,18 +134,6 @@ def confine_position_to_boundary(p):
     return p
 
 
-@ti.kernel
-def move_board():
-    # probably more accurate to exert force on particles according to hooke's law.
-    b = board_states[None]
-    b[1] += 1.0
-    period = 90
-    vel_strength = 8.0
-    if b[1] >= 2 * period:
-        b[1] = 0
-    b[0] += -ti.sin(b[1] * np.pi / period) * vel_strength * time_delta
-    board_states[None] = b
-
 
 ################prologue##########
 @ti.kernel
@@ -152,10 +141,8 @@ def prologue():
     # save old positions
     for i in positions:
         old_positions[i] = positions[i]
-
     # apply gravity within boundary
     extern_force()
-
     neighbor_search()
 
 @ti.func
@@ -296,11 +283,6 @@ def render(gui):
 
 
 @ti.kernel
-def init():
-    for i in range(num_particles):
-        positions[i] = ti.Vector([ti.random() for i in range(dim)]) * 0.4 + 0.15
-        
-@ti.kernel
 def init_particles():
     for i in range(num_particles):
         delta = h * 0.8
@@ -312,36 +294,16 @@ def init_particles():
             velocities[i][c] = (ti.random() - 0.5) * 4
     board_states[None] = ti.Vector([boundary[0] - epsilon, -0.0])
 
-def print_stats():
-    print('PBF stats:')
-    num = grid_num_particles.to_numpy()
-    avg, max = np.mean(num), np.max(num)
-    print(f'  #particles per cell: avg={avg:.2f} max={max}')
-    num = particle_num_neighbors.to_numpy()
-    avg, max = np.mean(num), np.max(num)
-    print(f'  #neighbors per particle: avg={avg:.2f} max={max}')
-
 
 def main():
     init_particles()
     print(f'boundary={boundary} grid={grid_size} cell_size={cell_size}')
     gui = ti.GUI('PBF2D', screen_res)
-
-    export_file = "/PLY/result.ply" 
-
     while gui.running and not gui.get_event(gui.ESCAPE):
-        # move_board()
         run_pbf()
-        if gui.frame % 20 == 1:
-            print_stats()
         render(gui)
-
-        # pos = positions.to_numpy()
-        # if export_file:
-        #     writer = ti.tools.PLYWriter(num_vertices=num_particles)
-        #     writer.add_vertex_pos(pos[:, 0], pos[:, 1], pos[:, 2])
-        #     writer.export_frame(gui.frame, export_file)
 
 
 if __name__ == '__main__':
     main()
+
