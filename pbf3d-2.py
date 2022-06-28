@@ -14,9 +14,13 @@ dx = 1 / n_grid
 p_rho = 1
 p_vol = (dx * 0.5)**2
 p_mass = p_vol * p_rho
-gravity = 9.8
-pbf_num_iters = 5
+pbf_num_iters = 25
 time_delta = 1.0 / 20.0
+epsilon = 1e-5
+
+h = 0.001
+particle_radius = h * 1.05 #spacing
+
 
 positions = ti.Vector.field(dim, float, num_particles)
 old_positions = ti.Vector.field(dim, float, num_particles)
@@ -26,7 +30,12 @@ neighbour = (3, ) * dim
 
 @ti.func
 def extern_force():
-    pass
+    for i in positions:
+        g = ti.Vector([0., -0.1, 0.1])
+        pos, vel = positions[i], velocities[i]
+        vel += g * time_delta
+        pos += vel * time_delta
+        positions[i] = confine_position_to_boundary(pos)
     
 @ti.func
 def neighbor_search():
@@ -41,6 +50,14 @@ def prologue():
 
 @ti.func
 def confine_position_to_boundary(p):
+    bmin = 0. + 1e-3
+    bmax = 2. - 1e-3
+    for i in ti.static(range(dim)):
+        # Use randomness to prevent particles from sticking into each other after clamping
+        if p[i] <= bmin:
+            p[i] = bmin + epsilon * ti.random()
+        elif bmax <= p[i]:
+            p[i] = bmax - epsilon * ti.random()
     return p
 
 @ti.kernel
@@ -88,11 +105,14 @@ def T(a):
 init()
 gui = ti.GUI('3D', background_color=0x112F41)
 while gui.running and not gui.get_event(gui.ESCAPE):
-
+    # if  gui.is_pressed('s'):
     run_pbf()
+
+
     pos = positions.to_numpy()
 
-    export_file = r"PLY/res.ply"
+    export_file=''
+    # export_file = r"PLY/res.ply"
     if export_file:
         writer = ti.tools.PLYWriter(num_vertices=num_particles)
         writer.add_vertex_pos(pos[:, 0], pos[:, 1], pos[:, 2])
