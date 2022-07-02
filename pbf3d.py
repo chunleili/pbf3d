@@ -6,41 +6,89 @@ import taichi as ti
 
 ti.init(arch=ti.cpu, debug=True, cpu_max_num_threads=1, advanced_optimization=False)
 
-dim, n_grid, steps, dt = 3, 32, 25, 4e-4
+dim = 3
+num_particles = 8000
+h = 0.01
 
-num_particles = n_grid**dim // 2**(dim - 1)
-dx = 1 / n_grid
 
-p_rho = 1
-p_vol = (dx * 0.5)**2
+p_rho = 1000.0
+particle_radius = h/3
+p_vol =  (particle_radius)**2 
 p_mass = p_vol * p_rho
-pbf_num_iters = 1
 time_delta = 1.0 / 20.0
-epsilon = 1e-5
-
-h = 0.001
-particle_radius = h * 1.05 #spacing
 
 
 positions = ti.Vector.field(dim, float, num_particles)
 old_positions = ti.Vector.field(dim, float, num_particles)
 velocities = ti.Vector.field(dim, float, num_particles)
 
+
 paused = ti.field(dtype=ti.i32, shape=())
 
+
+# ---------------------------------------------------------------------------- #
+#                                Neighbor search                               #
+# ---------------------------------------------------------------------------- #
+# the helper function for neighbor search
 @ti.func
-def extern_force():
-    for i in positions:
-        g = ti.Vector([0., -0.1, 0.1])
-        pos, vel = positions[i], velocities[i]
-        vel += g * time_delta
-        pos += vel * time_delta
-        positions[i] = confine_position_to_boundary(pos)
-    
+def get_cell_ID(pos):
+    return int(pos * cell_inv)
+
+cell_size = 3 * h
+cell_inv = 1.0/cell_size
+num_cell_x = num_cell_y = num_cell_z = (int)(cell_inv)
+
+max_num_particles_per_cell = 100
+grid_num_particles = ti.field(ti.i32, shape=(num_cell_x,num_cell_y,num_cell_z))
+grid2particles = ti.field(ti.i32, shape=(num_cell_x,num_cell_y,num_cell_z, max_num_particles_per_cell))
+
+max_num_neighbors = 50
+num_neighbor = ti.field(ti.i32, shape=num_particles)
+particle_neighbors = ti.field(ti.i32, shape=(num_particles, max_num_neighbors))
+
+@ti.func
+def clear_lists():
+    for cell in ti.grouped(grid_num_particles):
+        grid_num_particles[cell] = 0
+
+@ti.func
+def build_parInCell_list():
+    for p_i in range(num_particles):
+        cell = get_cell_ID(positions[p_i])
+        offs = grid_num_particles[cell]
+        grid_num_particles[cell] += 1
+        grid2particles[cell, offs] = p_i
+
+@ti.func     
+def build_neighbor_list():
+    neighbor_radius = 1.1 * h
+    for p_i in positions:
+        cell = get_cell_ID(positions[p_i])
+        pos_i = positions[p_i]
+        nb_i = 0 # the nb_i th neighbor of p_i
+        for offs in ti.static(ti.grouped(ti.ndrange((-1, 2), (-1, 2), (-1,2)))):
+            for j in range(grid_num_particles[cell + offs]):
+                p_j = grid2particles[cell+ offs, j] #particles in the neighbor cell 
+                if (pos_i - positions[p_j]).norm() < neighbor_radius:
+                    particle_neighbors[p_i, nb_i] = p_j
+                    nb_i += 1
+                    num_neighbor[p_i] +=1 
+
+
+
 @ti.func
 def neighbor_search():
-    pass
+    clear_lists()
+    build_parInCell_list()
+    build_neighbor_list()
 
+# ---------------------------------------------------------------------------- #
+#                              end neighbor search                             #
+# ---------------------------------------------------------------------------- #
+
+# ---------------------------------------------------------------------------- #
+#                                    proloug                                   #
+# ---------------------------------------------------------------------------- #
 @ti.kernel
 def prologue():
     for i in positions:
@@ -49,26 +97,51 @@ def prologue():
     neighbor_search()
 
 @ti.func
-def confine_position_to_boundary(p):
-    bmin = 0. + 1e-3
-    bmax = 2. - 1e-3
-    for i in ti.static(range(dim)):
-        # Use randomness to prevent particles from sticking into each other after clamping
-        if p[i] <= bmin:
-            p[i] = bmin + epsilon * ti.random()
-        elif bmax <= p[i]:
-            p[i] = bmax - epsilon * ti.random()
-    return p
+def extern_force():
+    for i in positions:
+        g = ti.Vector([0., -0.1, 0.1])
+        vel = velocities[i]
+        vel += g * time_delta
+        positions[i] += vel * time_delta
+        # positions[i] = confine_position_to_boundary(pos)
+
+# @ti.func
+# def confine_position_to_boundary(p):
+#     epsilon = 1e-2
+#     bmin = 0. + epsilon
+#     bmax = 1. - epsilon
+#     for i in ti.static(range(dim)):
+#         if p[i] <= bmin:
+#             p[i] = bmin + epsilon * ti.random()
+#         elif bmax <= p[i]:
+#             p[i] = bmax - epsilon * ti.random()
+#     return p
+
+@ti.func
+def boundary_handling(p_i):
+    padding = 1e-1
+    bmin = 0. + padding
+    bmax = 1. - padding
+    for dim_i in ti.static(range(dim)):
+        if positions[p_i][dim_i] > bmax:
+            positions[p_i][dim_i] = bmax - ti.random() * 1e-3
+            velocities[p_i][dim_i] *= -1.0 
+        if positions[p_i][dim_i] < bmin:
+            positions[p_i][dim_i] = bmin + ti.random() * 1e-3
+            velocities[p_i][dim_i] *= -1.0 
 
 @ti.kernel
 def epilogue():
     # confine to boundary
-    for i in positions:
-        pos = positions[i]
-        positions[i] = confine_position_to_boundary(pos)
+    # for i in positions:
+    #     pos = positions[i]
+        # positions[i] = confine_position_to_boundary(pos)
     # update velocities
     for i in positions:
         velocities[i] = (positions[i] - old_positions[i]) / time_delta
+    for i in positions:
+        boundary_handling(i)
+    
 
 
 @ti.kernel
@@ -77,30 +150,24 @@ def substep():
 
 def run_pbf():
     prologue()
-    for _ in range(pbf_num_iters):
+    # np.savetxt("neighbor.csv", num_neighbor.to_numpy(), delimiter=',')
+    for _ in range(1): #num substeps per frame
         substep()
     epilogue()
 
-
-# @ti.kernel
-# def init():
-#     for i in range(num_particles):
-#         positions[i] = ti.Vector([ti.random() for i in range(dim)]) * 0.4 + 0.15
-
-
 @ti.kernel
 def init():
+    init_pos = ti.Vector([0.2,0.3,0.2])
     cube_size = 0.4
     spacing = 0.02
     num_per_row = (int) (cube_size // spacing)
     num_per_floor = num_per_row * num_per_row
-
     for i in range(num_particles):
         floor = i // (num_per_floor) + 1 # prevent divided by zero
         row = (i % num_per_floor) // num_per_row
         col = (i % num_per_floor) % num_per_row
+        positions[i] = ti.Vector([row*spacing, floor*spacing, col*spacing]) + init_pos
 
-        positions[i] = ti.Vector([row*spacing, floor*spacing, col*spacing]) + 0.15
 
 def T(a):
     if dim == 2:
@@ -127,7 +194,6 @@ while gui.running and not gui.get_event(gui.ESCAPE):
         paused[None] = not paused[None]
 
     if not paused[None]:
-    # if  gui.is_pressed('s'):
         run_pbf()
 
 
