@@ -130,17 +130,6 @@ def confine_position_to_boundary(p):
     return p
 
 
-@ti.kernel
-def move_board():
-    # probably more accurate to exert force on particles according to hooke's law.
-    b = board_states[None]
-    b[1] += 1.0
-    period = 90
-    vel_strength = 8.0
-    if b[1] >= 2 * period:
-        b[1] = 0
-    b[0] += -ti.sin(b[1] * np.pi / period) * vel_strength * time_delta
-    board_states[None] = b
 
 
 @ti.kernel
@@ -257,16 +246,7 @@ def run_pbf():
     epilogue()
 
 
-def render(gui):
-    gui.clear(bg_color)
-    pos_np = positions.to_numpy()
-    for j in range(dim):
-        pos_np[:, j] *= screen_to_world_ratio / screen_res[j]
-    gui.circles(pos_np, radius=particle_radius, color=particle_color)
-    gui.rect((0, 0), (board_states[None][0] / boundary[0], 1),
-             radius=1.5,
-             color=boundary_color)
-    gui.show()
+
 
 
 @ti.kernel
@@ -282,27 +262,41 @@ def init_particles():
     board_states[None] = ti.Vector([boundary[0] - epsilon, -0.0])
 
 
-def print_stats():
-    print('PBF stats:')
-    num = grid_num_particles.to_numpy()
-    avg, max = np.mean(num), np.max(num)
-    print(f'  #particles per cell: avg={avg:.2f} max={max}')
-    num = particle_num_neighbors.to_numpy()
-    avg, max = np.mean(num), np.max(num)
-    print(f'  #neighbors per particle: avg={avg:.2f} max={max}')
+
+
+def T(a):
+    if dim == 2:
+        return a
+
+    phi, theta = np.radians(28), np.radians(32)
+
+    a = a - 0.5
+    x, y, z = a[:, 0], a[:, 1], a[:, 2]
+    c, s = np.cos(phi), np.sin(phi)
+    C, S = np.cos(theta), np.sin(theta)
+    x, z = x * c + z * s, z * c - x * s
+    u, v = x, y * C + z * S
+    return np.array([u, v]).swapaxes(0, 1) + 0.5
 
 
 def main():
     init_particles()
     print(f'boundary={boundary} grid={grid_size} cell_size={cell_size}')
-    gui = ti.GUI('PBF2D', screen_res)
+    gui = ti.GUI('PBF3D', screen_res)
     while gui.running and not gui.get_event(gui.ESCAPE):
-        move_board()
-        run_pbf()
-        if gui.frame % 20 == 1:
-            print_stats()
-        render(gui)
 
+        run_pbf()
+
+        pos = positions.to_numpy()
+
+        export_file = ""
+        if export_file:
+            writer = ti.tools.PLYWriter(num_vertices=num_particles)
+            writer.add_vertex_pos(pos[:, 0], pos[:, 1], pos[:, 2])
+            writer.export_frame(gui.frame, export_file)
+
+        gui.circles(T(pos), radius=1.5, color=0x66ccff)
+        gui.show()
 
 if __name__ == '__main__':
     main()
