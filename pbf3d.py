@@ -8,7 +8,7 @@ import numpy as np
 
 import taichi as ti
 
-ti.init(arch=ti.gpu)
+ti.init()
 
 screen_res = (800, 800)
 screen_to_world_ratio = 20.0
@@ -142,7 +142,7 @@ def prologue():
         old_positions[i] = positions[i]
     # apply gravity within boundary
     for i in positions:
-        g = ti.Vector([0.0, -9.8, 0.0])
+        g = ti.Vector([0.0, -10.0, 0.0])
         pos, vel = positions[i], velocities[i]
         vel += g * time_delta
         pos += vel * time_delta
@@ -293,17 +293,20 @@ def main():
 
         pos = positions.to_numpy()
         # print(pos)
-        export_file = "PLY/pbf3d.ply"
-        if export_file:
-            writer = ti.tools.PLYWriter(num_vertices=num_particles)
-            writer.add_vertex_pos(pos[:, 0], pos[:, 1], pos[:, 2])
-            writer.export_frame(gui.frame, export_file)
+        # export_file = "PLY/pbf3d.ply"
+        # if export_file:
+            # writer = ti.tools.PLYWriter(num_vertices=num_particles)
+            # writer.add_vertex_pos(pos[:, 0], pos[:, 1], pos[:, 2])
+            # writer.export_frame(gui.frame, export_file)
 
         gui.circles(T(pos)/100.0, radius=3, color=0x66ccff)
-        gui.show(f'pic/res_{frame:06d}.png')
+        # gui.show(f'pic/res_{frame:06d}.png')
         frame+=1
-        if frame == 201:
-            exit()
+        gui.show()
+        # gui.show(f'pic/res_{frame:06d}.png')
+
+        # if frame == 201:
+            # exit()
 
 if __name__ == '__main__':
     main()
