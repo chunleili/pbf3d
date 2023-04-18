@@ -116,7 +116,7 @@ def get_cell(pos):
 def is_in_grid(c):
     # @c: Vector(i32)
     return 0 <= c[0] and c[0] < grid_size[0] and 0 <= c[1] and c[
-        1] < grid_size[1]
+        1] < grid_size[1] and c[2] >= 0 and c[2] < grid_size[2] 
 
 
 @ti.func
